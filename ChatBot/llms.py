@@ -1,7 +1,7 @@
 import os
 import logging
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 load_dotenv()
 
@@ -26,7 +26,14 @@ def initialize_llm(llm_type):
             max_retries=2
         )
         logger.info(f"Successfully initialized LLM of type: {llm_type}")
-        return llm
+
+        embedding = OpenAIEmbeddings(
+            api_key=os.environ["MODEL_SCOPE_KEY"],
+            base_url="https://api-inference.modelscope.cn/v1",
+            model="Qwen/Qwen3-Embedding-8B",
+            deployment="Qwen/Qwen3-Embedding-8B"
+        )
+        return llm, embedding
     except LLMInitializationError as e:
         logger.error(f"LLM initialization error: {e}")
         raise LLMInitializationError(f"Failed to initialize LLM: {e}")
@@ -34,11 +41,11 @@ def initialize_llm(llm_type):
         logger.error(f"Unexpected error during LLM initialization: {e}")
         raise LLMInitializationError(f"An unexpected error occurred during LLM initialization: {e}")
     
-def get_llm(llm_type)->ChatOpenAI:
+def get_llm(llm_type)->tuple:
     """Get the initialized LLLM instance."""
     try:
-        llm = initialize_llm(llm_type)
-        return llm
+        llm, embedding = initialize_llm(llm_type)
+        return llm, embedding
     except LLMInitializationError as e:
         logger.error(f"Error getting LLM: {e}")
         raise LLMInitializationError(f"Failed to get LLM: {e}")

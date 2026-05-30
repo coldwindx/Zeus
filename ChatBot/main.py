@@ -8,8 +8,9 @@ import uuid
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from langgraph.graph import END, START, StateGraph
-from langgraph.graph.state import CompiledStateGraph
+from langgraph.graph.state import CompiledStateGraph, RunnableConfig
 from langgraph.graph.message import add_messages
+from langgraph.store.memory import BaseStore, InMemoryStore
 from pydantic import BaseModel, Field
 from langgraph.checkpoint.memory import MemorySaver
 import re
@@ -49,12 +50,27 @@ class ChatCompletionResponse(BaseModel):
 class State(TypedDict):
     messages: Annotated[list, add_messages]
 
-def create(llm)->StateGraph:
+def create(llm, store)->StateGraph:
     try:
+
         builder = StateGraph(State)
 
-        def chatbot(state: State)->dict:
-            return {"messages": [llm.invoke(state["messages"])]}
+        def chatbot(state: State, config: RunnableConfig, *, store: BaseStore)->dict:
+            # Long term memory retrieval
+            namespace = ("memories", config["configurable"]["user"])
+            memories = store.search(namespace, query=str(state["messages"][-1].content))
+            info = "\n".join([d.value["data"] for d in memories])
+
+            last_message = state["messages"][-1].content
+            if "记住" in last_message:
+                store.put(namespace, str(uuid.uuid4()), {"data": last_message})
+            
+            # Short term memory retrieval
+            messages = state["messages"][-min(3, len(state["messages"])):]
+
+            # Here you would add the actual code to invoke the LLM and get the response
+            response = llm.invoke([{"role": "system", "content": f"You are a helpful assistant. Here is some relevant information from your memories:\n{info}"}] + messages)
+            return {"messages": [response]}
 
         builder.add_node("chatbot", chatbot)
         builder.add_edge(START, "chatbot")
@@ -62,7 +78,7 @@ def create(llm)->StateGraph:
 
         memory = MemorySaver()
 
-        return builder.compile(checkpointer=memory)
+        return builder.compile(checkpointer=memory, store=store)
     except Exception as e:
         logger.error(f"Error creating graph: {e}")
         raise RuntimeError(f"Failed to create graph: {e}")
@@ -99,8 +115,12 @@ async def lifespan(app: FastAPI):
     global graph
     try:
         logger.info("Initializing LLM...")
-        llm = get_llm("modelscope")
-        graph = create(llm)
+        llm, embedding = get_llm("modelscope")
+        store = InMemoryStore(index={
+            "embed": embedding,
+            "dims": 2048
+        })
+        graph = create(llm, store)
         visualization(graph)
         logger.info("LLM and graph initialized successfully.")
     except Exception as e:
@@ -122,7 +142,7 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
         query = request.messages[-1].content
         logger.info(f"Q: {query}")
 
-        connfig = {"configurable": {"thread_id": request.user + "@" + request.conversation}}
+        connfig = {"configurable": {"thread_id": request.user + "@" + request.conversation, "user": request.user}}
         logger.info(f"Conversation: {connfig}")
 
         prompt = [
