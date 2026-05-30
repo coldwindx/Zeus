@@ -1,0 +1,5 @@
+MODEL_SCOPE_KEY=<>you should not share your model scope key publicly>
+
+LANGSMITH_TRACING=true
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+LANGSMITH_API_KEY=<you should not share your API key publicly>
