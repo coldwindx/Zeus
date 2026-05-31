@@ -122,14 +122,13 @@ async def lifespan(app: FastAPI):
         llm, embedding = get_llm("modelscope")
 
         # Add a real database connection here and replace the InMemoryStore with a database-backed store
-        # DB_URI = "mysql://root:mysql123@172.16.1.223:3306/db_zeus?charset=utf8mb4"
         connection = pymysql.connect(host='172.16.1.223', port=3306, user='root', password='mysql123', database='db_zeus', autocommit=True)
         checkpointer = PyMySQLSaver(connection)
         checkpointer.setup()
 
-        # store = AIOMySQLStore(connection)
-        # store.setup()
-        store = InMemoryStore()
+        connection2 = pymysql.connect(host='172.16.1.223', port=3306, user='root', password='mysql123', database='db_zeus', autocommit=True)
+        store = PyMySQLStore(connection2)
+        store.setup()
 
         graph = create(llm, checkpointer, store)
         visualization(graph)
@@ -140,6 +139,7 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("Application shutdown.")
     connection.close()
+    connection2.close()
 
 app = FastAPI(lifespan=lifespan)
 @app.post("/v1/chat/completions")
