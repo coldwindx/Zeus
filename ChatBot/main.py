@@ -7,6 +7,7 @@ import uuid
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
+from gradio import on
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph, RunnableConfig
 from langgraph.graph.message import add_messages
@@ -14,9 +15,14 @@ from langgraph.store.memory import BaseStore, InMemoryStore
 from pydantic import BaseModel, Field
 from langgraph.checkpoint.memory import MemorySaver
 import re
+import pymysql
 
 import uvicorn
-
+from psycopg_pool import ConnectionPool
+from langgraph.checkpoint.mysql.aio import AIOMySQLSaver
+from langgraph.checkpoint.mysql.pymysql import PyMySQLSaver
+from langgraph.store.mysql.aio import AIOMySQLStore
+from langgraph.store.mysql.pymysql import PyMySQLStore
 from llms import get_llm
 
 
@@ -50,7 +56,7 @@ class ChatCompletionResponse(BaseModel):
 class State(TypedDict):
     messages: Annotated[list, add_messages]
 
-def create(llm, store)->StateGraph:
+def create(llm, checkpointer, store)->StateGraph:
     try:
 
         builder = StateGraph(State)
@@ -76,9 +82,7 @@ def create(llm, store)->StateGraph:
         builder.add_edge(START, "chatbot")
         builder.add_edge("chatbot", END)
 
-        memory = MemorySaver()
-
-        return builder.compile(checkpointer=memory, store=store)
+        return builder.compile(checkpointer=checkpointer, store=store)
     except Exception as e:
         logger.error(f"Error creating graph: {e}")
         raise RuntimeError(f"Failed to create graph: {e}")
@@ -116,11 +120,18 @@ async def lifespan(app: FastAPI):
     try:
         logger.info("Initializing LLM...")
         llm, embedding = get_llm("modelscope")
-        store = InMemoryStore(index={
-            "embed": embedding,
-            "dims": 2048
-        })
-        graph = create(llm, store)
+
+        # Add a real database connection here and replace the InMemoryStore with a database-backed store
+        # DB_URI = "mysql://root:mysql123@172.16.1.223:3306/db_zeus?charset=utf8mb4"
+        connection = pymysql.connect(host='172.16.1.223', port=3306, user='root', password='mysql123', database='db_zeus', autocommit=True)
+        checkpointer = PyMySQLSaver(connection)
+        checkpointer.setup()
+
+        # store = AIOMySQLStore(connection)
+        # store.setup()
+        store = InMemoryStore()
+
+        graph = create(llm, checkpointer, store)
         visualization(graph)
         logger.info("LLM and graph initialized successfully.")
     except Exception as e:
@@ -128,7 +139,7 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"Failed to initialize application: {e}")
     yield
     logger.info("Application shutdown.")
-
+    connection.close()
 
 app = FastAPI(lifespan=lifespan)
 @app.post("/v1/chat/completions")
