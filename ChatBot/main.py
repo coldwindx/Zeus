@@ -4,24 +4,19 @@ import logging
 from time import time
 from typing import Annotated, Optional, TypedDict
 import uuid
-
+from pydantic import BaseModel, Field
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
-from gradio import on
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph, RunnableConfig
 from langgraph.graph.message import add_messages
-from langgraph.store.memory import BaseStore, InMemoryStore
-from pydantic import BaseModel, Field
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.store.base import BaseStore
+
 import re
-import pymysql
 
 import uvicorn
-from psycopg_pool import ConnectionPool
-from langgraph.checkpoint.mysql.aio import AIOMySQLSaver
+from pymysql import Connection
 from langgraph.checkpoint.mysql.pymysql import PyMySQLSaver
-from langgraph.store.mysql.aio import AIOMySQLStore
 from langgraph.store.mysql.pymysql import PyMySQLStore
 from llms import get_llm
 
@@ -122,11 +117,13 @@ async def lifespan(app: FastAPI):
         llm, embedding = get_llm("modelscope")
 
         # Add a real database connection here and replace the InMemoryStore with a database-backed store
-        connection = pymysql.connect(host='172.16.1.223', port=3306, user='root', password='mysql123', database='db_zeus', autocommit=True)
-        checkpointer = PyMySQLSaver(connection)
+        connection1 = Connection(host="172.16.1.223", port=3306, user="root", password="mysql123", database="db_zeus")
+        connection2 = Connection(host="172.16.1.223", port=3306, user="root", password="mysql123", database="db_zeus")
+        logger.info("Database connection established successfully.")
+
+        checkpointer = PyMySQLSaver(connection1)
         checkpointer.setup()
 
-        connection2 = pymysql.connect(host='172.16.1.223', port=3306, user='root', password='mysql123', database='db_zeus', autocommit=True)
         store = PyMySQLStore(connection2)
         store.setup()
 
@@ -138,7 +135,7 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"Failed to initialize application: {e}")
     yield
     logger.info("Application shutdown.")
-    connection.close()
+    connection1.close()
     connection2.close()
 
 app = FastAPI(lifespan=lifespan)
@@ -168,7 +165,7 @@ async def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResp
             async def stream_response():
                 chunk_id = f"chatcmpl-{uuid.uuid4().hex}"
                 
-                async for message_chunk in graph.astream({"messages": prompt}, connfig, stream_model="message"):
+                async for message_chunk in graph.astream({"messages": prompt}, connfig, stream_mode="messages"):
                     chunk = message_chunk["chatbot"]["messages"][-1].content
                     logger.info(f"Chunk: {chunk}")
                     yield f"data: {json.dumps({'id': chunk_id,'object': 'chat.completion.chunk','created': int(time()),'choices': [{'index': 0,'delta': {'content': chunk},'finish': None}]})}\n\n"
